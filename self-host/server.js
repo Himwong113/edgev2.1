@@ -13,7 +13,7 @@ installRuntime();
 const { default: worker } = await import('../_worker.js');
 
 export async function createApp(settings = process.env) {
-  if (!settings.ADMIN || settings.ADMIN.trim().length < 16 || /[\r\n]/.test(settings.ADMIN)) {
+  if (!settings.ADMIN || settings.ADMIN === 'replace-with-a-long-random-password' || settings.ADMIN.trim().length < 16 || /[\r\n]/.test(settings.ADMIN)) {
     throw new Error('Set ADMIN to a password of at least 16 characters, or run npm run setup');
   }
   const publicURL = new URL(settings.PUBLIC_URL || 'http://localhost:8080');
@@ -31,14 +31,22 @@ export async function createApp(settings = process.env) {
   // Do not pass the OS PATH into the worker's unrelated tunnel PATH setting.
   const forwarded = Object.fromEntries(['ADMIN', 'KEY', 'PROXYIP', 'URL', 'GO2SOCKS5', 'DEBUG', 'OFF_LOG', 'PROXY_CONCURRENT_DIAL']
     .filter(key => settings[key] !== undefined).map(key => [key, settings[key]]));
-  const env = { ...forwarded, UUID: uuid, HOST: publicURL.hostname, LOCAL_MODE: true, KV: kv,
+  // The Request already uses PUBLIC_URL; let the worker read its hostname,
+  // avoiding the upstream HOST-list parser's IPv6 colon stripping.
+  const env = { ...forwarded, UUID: uuid, LOCAL_MODE: true, KV: kv,
     ...(settings.TUNNEL_PATH ? { PATH: settings.TUNNEL_PATH } : {}),
     TCP_CONCURRENT_DIAL: settings.TCP_CONCURRENT_DIAL || '1',
     validateConfig(config) {
-      if (!config || !config.UUID || !config.HOST || !config.优选订阅生成?.本地IP库
-        || !config.订阅转换配置 || !config.反代?.SOCKS5 || !config.TG || !config.SS) {
+      const object = value => value && typeof value === 'object' && !Array.isArray(value);
+      if (!object(config) || typeof config.UUID !== 'string' || typeof config.HOST !== 'string'
+        || ![config.优选订阅生成, config.优选订阅生成?.本地IP库, config.订阅转换配置,
+          config.反代, config.反代?.SOCKS5, config.TG, config.SS].every(object)) {
         return 'Incomplete configuration; keep all existing configuration sections';
       }
+      if (typeof config.PATH !== 'string' || !config.PATH.startsWith('/')
+        || !Array.isArray(config.HOSTS) || !config.HOSTS.every(host => typeof host === 'string')
+        || typeof config.优选订阅生成.SUBNAME !== 'string') return 'Invalid path, host list, or node name';
+      if (!['aes-128-gcm', 'aes-256-gcm'].includes(config.SS.加密方式)) return 'Shadowsocks cipher must be aes-128-gcm or aes-256-gcm';
       try { makeNodeLink(config, origin); return null; } catch (error) { return error.message; }
     },
     makeNodeLink: config => makeNodeLink(config, origin),
@@ -84,6 +92,9 @@ export async function createApp(settings = process.env) {
       const path = new URL(request.url).pathname;
       if (raw.method === 'POST' && raw.headers.origin && raw.headers.origin !== origin) {
         res.writeHead(403); res.end('Origin does not match PUBLIC_URL'); return;
+      }
+      if (path === '/admin/init' && raw.method !== 'POST') {
+        res.writeHead(405, { Allow: 'POST' }); res.end('Reset configuration with an authenticated POST request'); return;
       }
       if (raw.method === 'POST' && path !== '/login' && !path.startsWith('/admin/')) {
         res.writeHead(501); res.end('Use WebSocket transport for self-hosted deployment'); return;

@@ -108,7 +108,10 @@ test('local login, English pages, authentication, configuration and native subsc
   assert.equal(singbox.outbounds[0].server_port, 8080);
   assert.equal(singbox.outbounds[0].tls, undefined);
   const invalid = await fetch(base + '/sub?token=invalid');
+  assert.equal(invalid.status, 403);
   assert.ok(!(await invalid.text()).includes(UUID));
+  const reset = await fetch(base + '/admin/init', { headers });
+  assert.equal(reset.status, 405, 'GET must not reset saved configuration');
   config.优选订阅生成.SUBNAME = 'Saved home server';
   const save = await fetch(base + '/admin/config.json', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
   assert.equal(save.status, 200);
@@ -118,6 +121,11 @@ test('local login, English pages, authentication, configuration and native subsc
   assert.equal(unsupported.status, 400);
   assert.match(await unsupported.text(), /WebSocket/);
   assert.equal(JSON.parse(await app.kv.get('config.json')).传输协议, 'ws');
+  config.传输协议 = 'ws';
+  config.订阅转换配置 = 'broken';
+  const malformed = await fetch(base + '/admin/config.json', { method: 'POST', headers, body: JSON.stringify(config) });
+  assert.equal(malformed.status, 400);
+  assert.match(await malformed.text(), /Incomplete configuration/);
 });
 
 test('HTTPS origin uses secure cookies and TLS links with a custom port', async t => {
@@ -238,5 +246,14 @@ test('generated UUID persists across server recreation', async t => {
 
 test('startup rejects missing passwords and invalid UUIDs', async () => {
   await assert.rejects(createApp({}), /ADMIN/);
+  await assert.rejects(createApp({ ADMIN: 'replace-with-a-long-random-password' }), /ADMIN/);
   await assert.rejects(createApp({ ADMIN, UUID: 'bad' }), /UUIDv4/);
+});
+
+test('IPv6 public address is preserved in node links and subscription identity', async t => {
+  const { base, login } = await fixture(t, { PUBLIC_URL: 'http://[::1]:8080' });
+  const cookie = await login();
+  const config = await (await fetch(base + '/admin/config.json', { headers: { Cookie: cookie, 'User-Agent': agent } })).json();
+  assert.equal(config.HOST, '[::1]');
+  assert.equal(new URL(config.LINK).hostname, '[::1]');
 });

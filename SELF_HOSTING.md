@@ -123,4 +123,4 @@ npm ci
 npm test
 ```
 
-The integration tests exercise local login, secure-cookie handling, authenticated settings, native subscription formats, invalid credentials, file persistence, VLESS early data, a 256 KiB transfer, and real TCP echo traffic through VLESS, Trojan, and Shadowsocks AEAD. Public router access and certificate issuance depend on your server/domain and must be checked there.
+The 11 integration tests exercise local login, secure-cookie handling, authenticated settings, native subscription formats, invalid credentials, file persistence, VLESS early data, IPv6 addresses, a 256 KiB transfer, and real TCP echo traffic through VLESS, Trojan, and Shadowsocks AEAD. The Docker image was also verified for startup, login, configuration persistence after restart, and VLESS WebSocket traffic through a running Caddy reverse proxy. Public router access and certificate issuance depend on your server/domain and must be checked there.

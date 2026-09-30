@@ -69,17 +69,17 @@ export default {
 			}
 		} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
-			log(`[WebSocket] 命中请求: ${url.pathname}${url.search}`);
+			log(`[WebSocket] Request matched: ${url.pathname}${url.search}`);
 			return await 处理WS请求(request, userID, url, 反代上下文);
 		} else if (管理员密码 && !访问路径.startsWith('admin/') && 访问路径 !== 'login' && request.method === 'POST') {// gRPC/XHTTP代理
 			const 反代上下文 = await 反代参数获取(url, userID, 默认反代IP, 默认反代兜底);
 			const referer = request.headers.get('Referer') || '';
 			const 命中XHTTP特征 = referer.includes('x_padding', 14) || referer.includes('x_padding=');
 			if (!命中XHTTP特征 && contentType.startsWith('application/grpc')) {
-				log(`[gRPC] 命中请求: ${url.pathname}${url.search}`);
+				log(`[gRPC] Request matched: ${url.pathname}${url.search}`);
 				return await 处理gRPC请求(request, userID, 反代上下文);
 			}
-			log(`[XHTTP] 命中请求: ${url.pathname}${url.search}`);
+			log(`[XHTTP] Request matched: ${url.pathname}${url.search}`);
 			return await 处理XHTTP请求(request, userID, 反代上下文);
 		} else {
 			if (url.protocol === 'http:' && !env.LOCAL_MODE) return Response.redirect(url.href.replace(`http://${url.hostname}`, `https://${url.hostname}`), 301);
@@ -632,7 +632,7 @@ async function 处理XHTTP请求(request, yourUUID, 反代上下文 = {}) {
 					try { remoteConnWrapper.socket?.close() } catch (e) { }
 					closeSocketQuietly(xhttpBridge);
 				},
-				名称: 'XHTTP上行'
+				名称: 'XHTTP upload'
 			});
 
 			const 写入远端 = async (payload, allowRetry = true) => {
@@ -678,7 +678,7 @@ async function 处理XHTTP请求(request, yourUUID, 反代上下文 = {}) {
 				}
 			} catch (err) {
 				转发失败 = true;
-				log(`[XHTTP转发] 处理失败: ${err?.message || err}`);
+				log(`[XHTTP tunnel] Processing failed: ${err?.message || err}`);
 				closeSocketQuietly(xhttpBridge);
 			} finally {
 				const 保持木马UDP反代下行 = !转发失败 && 首包.isUDP && 首包.协议 === 'trojan' && 木马UDP上下文.反代地址 && 木马UDP上下文.反代Socket;
@@ -876,7 +876,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 	let 当前写入Socket = null;
 	let 远端写入器 = null;
 	let GRPC上行写入队列 = null;
-	//log('[gRPC] 开始处理双向流');
+	//log('[gRPC] Starting bidirectional stream');
 	const grpcHeaders = new Headers({
 		'Content-Type': 'application/grpc',
 		'grpc-status': '0',
@@ -1010,7 +1010,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 					await remoteConnWrapper.retryConnect();
 				},
 				关闭连接,
-				名称: 'gRPC上行'
+				名称: 'gRPC upload'
 			});
 
 			const 写入远端 = async (payload, allowRetry = true) => {
@@ -1067,7 +1067,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 								const 解析结果 = 解析木马请求(首包bytes, yourUUID);
 								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');
 								const { port, hostname, rawClientData, isUDP } = 解析结果;
-								log(`[gRPC] 木马首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
+								log(`[gRPC] Trojan initial packet: ${hostname}:${port} | UDP: ${isUDP ? 'yes' : 'no'}`);
 								if (isSpeedTestSite(hostname)) {
 									grpcBridge.send(构造本地204响应());
 									return;
@@ -1086,7 +1086,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 								const 解析结果 = 解析魏烈思请求(首包bytes, yourUUID);
 								if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid VLESS request');
 								const { port, hostname, version, isUDP, rawClientData } = 解析结果;
-								log(`[gRPC] 魏烈思首包: ${hostname}:${port} | UDP: ${isUDP ? '是' : '否'}`);
+								log(`[gRPC] VLESS initial packet: ${hostname}:${port} | UDP: ${isUDP ? 'yes' : 'no'}`);
 								const respHeader = new Uint8Array([version, 0]);
 								if (isSpeedTestSite(hostname)) {
 									grpcBridge.send(构造本地204响应(respHeader));
@@ -1111,7 +1111,7 @@ async function 处理gRPC请求(request, yourUUID, 反代上下文 = {}) {
 				await 上行写入队列.等待空();
 			} catch (err) {
 				转发失败 = true;
-				log(`[gRPC转发] 处理失败: ${err?.message || err}`);
+				log(`[gRPC tunnel] Processing failed: ${err?.message || err}`);
 			} finally {
 				const 保持木马UDP反代下行 = !转发失败 && isDnsQuery && 判断是否是木马 && 木马UDP上下文.反代地址 && 木马UDP上下文.反代Socket;
 				if (保持木马UDP反代下行) {
@@ -1267,7 +1267,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			try { remoteConnWrapper.socket?.close() } catch (e) { }
 			closeSocketQuietly(serverSock);
 		},
-		名称: 'WS上行'
+		名称: 'WebSocket upload'
 	});
 
 	const 写入远端 = async (chunk, allowRetry = true) => {
@@ -1313,8 +1313,8 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 								if (lengthPlain.byteLength !== 2) continue;
 								const payloadLength = (lengthPlain[0] << 8) | lengthPlain[1];
 								if (payloadLength < 0 || payloadLength > 加密配置.maxChunk) continue;
-								if (offset > 0) log(`[SS入站] 检测到前导噪声 ${offset}B，已自动对齐`);
-								if (加密配置.method !== 首选加密配置.method) log(`[SS入站] URL enc=${请求加密方式 || 首选加密配置.method} 与实际 ${加密配置.method} 不一致，已自动切换`);
+								if (offset > 0) log(`[SS inbound] Skipped ${offset}B of leading noise`);
+								if (加密配置.method !== 首选加密配置.method) log(`[SS inbound] URL enc=${请求加密方式 || 首选加密配置.method} differs from ${加密配置.method}; cipher switched`);
 								入站状态.buffer = 入站状态.buffer.subarray(初始化最小长度);
 								入站状态.decryptKey = decryptKey;
 								入站状态.nonceCounter = nonceCounter;
@@ -1412,7 +1412,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 							}
 						});
 					}).catch((error) => {
-						log(`[SS发送] 加密失败: ${error?.message || error}`);
+						log(`[SS outbound] Encryption failed: ${error?.message || error}`);
 						closeSocketQuietly(serverSock);
 					});
 					return SS发送队列;
@@ -1456,7 +1456,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		} catch (err) {
 			const msg = err?.message || `${err}`;
 			if (msg.includes('Decryption failed') || msg.includes('SS handshake decrypt failed') || msg.includes('SS length decrypt failed')) {
-				log(`[SS入站] 解密失败，连接关闭: ${msg}`);
+				log(`[SS inbound] Decryption failed; closing connection: ${msg}`);
 				closeSocketQuietly(serverSock);
 				return;
 			}
@@ -1544,7 +1544,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 				判断协议类型 = bytes.byteLength >= 58 && bytes[56] === 0x0d && bytes[57] === 0x0a ? '木马' : '魏烈思';
 			}
 			判断是否是木马 = 判断协议类型 === '木马';
-			log(`[WS转发] 协议类型: ${判断协议类型} | 来自: ${url.host} | UA: ${request.headers.get('user-agent') || '未知'}`);
+			log(`[WebSocket] Protocol: ${判断协议类型 === '木马' ? 'trojan' : 判断协议类型 === '魏烈思' ? 'vless' : 判断协议类型} | Host: ${url.host} | UA: ${request.headers.get('user-agent') || 'unknown'}`);
 		}
 
 		if (判断协议类型 === 'ss') {
@@ -1602,9 +1602,9 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		WS显式队列条目 = 0;
 		const msg = err?.message || `${err}`;
 		if (msg.includes('Network connection lost') || msg.includes('ReadableStream is closed')) {
-			log(`[WS转发] 连接结束: ${msg}`);
+			log(`[WebSocket] Connection ended: ${msg}`);
 		} else {
-			log(`[WS转发] 处理失败: ${msg}`);
+			log(`[WebSocket] Processing failed: ${msg}`);
 		}
 		上行写入队列.清空();
 		释放远端写入器();
@@ -2059,7 +2059,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	const ctx代理参数 = 反代上下文.代理参数 || {};
 	const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;
 	let 反代数组索引 = 0;
-	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);
+	log(`[TCP] Destination: ${host}:${portNum} | Proxy address: ${ctx反代IP} | Fallback: ${ctx反代兜底 ? 'yes' : 'no'} | Proxy type: ${ctx代理类型 || 'proxyip'} | Global: ${ctx代理全局 ? 'yes' : 'no'}`);
 	const 连接超时毫秒 = 1000;
 	let 已通过代理发送首包 = false;
 	const TCP连接 = 创建请求TCP连接器(request);
@@ -2117,7 +2117,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 
 	async function 构建预加载竞速候选列表(address, port) {
 		if (!预加载竞速拨号 || isIPHostname(address)) return null;
-		log(`[TCP直连] 预加载竞速拨号开启，开始并发查询 ${address} 的 A/AAAA 记录`);
+		log(`[Direct TCP] Resolving A/AAAA records concurrently for ${address}`);
 		const [aRecords, aaaaRecords] = await Promise.all([
 			DoH查询(address, 'A'),
 			DoH查询(address, 'AAAA')
@@ -2138,11 +2138,11 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			? (ipList.length > ipv4List.length ? 'A+AAAA' : 'A')
 			: 'AAAA';
 		if (ipList.length === 0) {
-			log(`[TCP直连] ${address} 的 A/AAAA 未获得可用解析结果，预加载竞速不可用，回退到原始 hostname 直连。`);
+			log(`[Direct TCP] No usable A/AAAA records for ${address}; connecting by hostname.`);
 			return null;
 		}
 		const 选中IP列表 = ipList;
-		log(`[TCP直连] ${address} A记录:${ipv4List.length} AAAA记录:${ipv6List.length}，使用${使用记录类型}记录，竞速拨号 ${选中IP列表.length}/${拨号上限}: ${选中IP列表.join(', ')}`);
+		log(`[Direct TCP] ${address} A:${ipv4List.length} AAAA:${ipv6List.length}; using ${使用记录类型}; racing ${选中IP列表.length}/${拨号上限}: ${选中IP列表.join(', ')}`);
 		return 选中IP列表.map((hostname, attempt) => ({ hostname, port, attempt, resolvedFrom: address }));
 	}
 
@@ -2158,13 +2158,13 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			socket = 连接结果.socket;
 			if (预加载候选列表) {
 				const winner = 连接结果.candidate;
-				log(`[TCP直连] 预加载竞速结果: ${winner.hostname}:${winner.port} 胜出，源域名: ${winner.resolvedFrom || address}`);
+				log(`[Direct TCP] Dial race winner: ${winner.hostname}:${winner.port}; original hostname: ${winner.resolvedFrom || address}`);
 			}
 			await 写入首包(socket, data);
 			return socket;
 		} catch (err) {
 			try { socket?.close?.() } catch (e) { }
-			if (预加载候选列表) log(`[TCP直连] 预加载竞速失败: ${err.message || err}`);
+			if (预加载候选列表) log(`[Direct TCP] Dial race failed: ${err.message || err}`);
 			throw err;
 		}
 	}
@@ -2181,17 +2181,17 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 				}
 				let socket = null, candidate = null;
 				try {
-					log(`[反代连接] 并发尝试 ${候选列表.length} 路: ${候选列表.map(候选 => `${候选.hostname}:${候选.port}`).join(', ')}`);
+					log(`[Proxy] Racing ${候选列表.length} connections: ${候选列表.map(候选 => `${候选.hostname}:${候选.port}`).join(', ')}`);
 					const 连接结果 = await 并发打开候选连接(候选列表);
 					socket = 连接结果.socket;
 					candidate = 连接结果.candidate;
 					await 写入首包(socket, data);
-					log(`[反代连接] 成功连接到: ${candidate.hostname}:${candidate.port} (索引: ${candidate.index})`);
+					log(`[Proxy] Connected: ${candidate.hostname}:${candidate.port} (index: ${candidate.index})`);
 					反代数组索引 = candidate.index;
 					return socket;
 				} catch (err) {
 					try { socket?.close?.() } catch (e) { }
-					log(`[反代连接] 本批连接失败: ${err.message || err}`);
+					log(`[Proxy] Connection batch failed: ${err.message || err}`);
 				}
 			}
 		}
@@ -2225,21 +2225,21 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 		const 当前连接任务 = (async () => {
 			let newSocket;
 			if (使用木马反代) {
-				log(`[木马反代] 代理到: ${host}:${portNum}`);
+				log(`[Trojan fallback] Connecting to: ${host}:${portNum}`);
 				newSocket = await 连接木马反代(本次首包数据, TCP连接, 木马反代目标);
 			} else if (ctx代理类型 === 'socks5') {
-				log(`[SOCKS5代理] 代理到: ${host}:${portNum}`);
+				log(`[SOCKS5 proxy] Connecting to: ${host}:${portNum}`);
 				newSocket = await socks5Connect(host, portNum, 本次首包数据, TCP连接, ctx代理参数);
 			} else if (ctx代理类型 === 'http') {
-				log(`[HTTP代理] 代理到: ${host}:${portNum}`);
+				log(`[HTTP proxy] Connecting to: ${host}:${portNum}`);
 				newSocket = await httpConnect(host, portNum, 本次首包数据, false, TCP连接, ctx代理参数);
 			} else if (ctx代理类型 === 'https') {
-				log(`[HTTPS代理] 代理到: ${host}:${portNum}`);
+				log(`[HTTPS proxy] Connecting to: ${host}:${portNum}`);
 				newSocket = isIPHostname(ctx代理参数.hostname)
 					? await httpsConnect(host, portNum, 本次首包数据, TCP连接, ctx代理参数)
 					: await httpConnect(host, portNum, 本次首包数据, true, TCP连接, ctx代理参数);
 			} else if (ctx代理类型 === 'turn') {
-				log(`[TURN代理] 代理到: ${host}:${portNum}`);
+				log(`[TURN proxy] Connecting to: ${host}:${portNum}`);
 				newSocket = await turnConnect(ctx代理参数, host, portNum, TCP连接);
 				if (有效数据长度(本次首包数据) > 0) {
 					const writer = newSocket.writable.getWriter();
@@ -2247,7 +2247,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 					finally { try { writer.releaseLock() } catch (e) { } }
 				}
 			} else if (ctx代理类型 === 'sstp') {
-				log(`[SSTP代理] 代理到: ${host}:${portNum}`);
+				log(`[SSTP proxy] Connecting to: ${host}:${portNum}`);
 				newSocket = await sstpConnect(ctx代理参数, host, portNum, TCP连接);
 				if (有效数据长度(本次首包数据) > 0) {
 					const writer = newSocket.writable.getWriter();
@@ -2255,7 +2255,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 					finally { try { writer.releaseLock() } catch (e) { } }
 				}
 			} else {
-				log(`[反代连接] 代理到: ${host}:${portNum}`);
+				log(`[Proxy] Connecting to: ${host}:${portNum}`);
 				if (!ctx反代IP) throw new Error('Direct connection failed; no fallback proxy configured');
 				const 所有反代数组 = await 解析地址端口(ctx反代IP, host, yourUUID);
 				newSocket = await connectProxyIP(`${特征码字典[0]}.tp1.${特征码字典[2]}.xyz`, 1, 本次首包数据, 所有反代数组, ctx反代兜底);
@@ -2278,16 +2278,16 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	remoteConnWrapper.retryConnect = async () => connecttoPry(!已通过代理发送首包);
 
 	if (ctx代理类型 && (ctx代理全局 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\*/g, '.*')}$`, 'i').test(host)))) {
-		log(`[TCP转发] 启用 SOCKS5/HTTP/HTTPS/TURN/SSTP 全局代理`);
+		log(`[TCP] Using a global SOCKS5/HTTP/HTTPS/TURN/SSTP proxy`);
 		try {
 			await connecttoPry();
 		} catch (err) {
-			log(`[TCP转发] SOCKS5/HTTP/HTTPS/TURN/SSTP 代理连接失败: ${err.message}`);
+			log(`[TCP] SOCKS5/HTTP/HTTPS/TURN/SSTP proxy connection failed: ${err.message}`);
 			throw err;
 		}
 	} else {
 		try {
-			log(`[TCP转发] 尝试直连到: ${host}:${portNum}`);
+			log(`[TCP] Connecting directly to: ${host}:${portNum}`);
 			const initialSocket = await connectDirect(host, portNum, rawData, true);
 			remoteConnWrapper.socket = initialSocket;
 			connectStreams(initialSocket, ws, respHeader, async () => {
@@ -2295,7 +2295,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 				await connecttoPry();
 			});
 		} catch (err) {
-			log(`[TCP转发] 直连 ${host}:${portNum} 失败: ${err.message}`);
+			log(`[TCP] Direct connection to ${host}:${portNum} failed: ${err.message}`);
 			if (err instanceof Error && err.name === '预加载解析为空') {
 				closeSocketQuietly(ws);
 				throw err;
@@ -2308,19 +2308,19 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 async function forwardataudp(udpChunk, webSocket, respHeader, request, 响应封装器 = null) {
 	const 请求数据 = 数据转Uint8Array(udpChunk);
 	const 请求字节数 = 请求数据.byteLength;
-	log(`[UDP转发] 收到 DNS 请求: ${请求字节数}B -> 8.8.4.4:53`);
+	log(`[DNS forwarding] Received DNS query: ${请求字节数}B -> 8.8.4.4:53`);
 	try {
 		const TCP连接 = 创建请求TCP连接器(request);
 		const tcpSocket = TCP连接({ hostname: '8.8.4.4', port: 53 });
 		let 魏烈思Header = respHeader;
 		const writer = tcpSocket.writable.getWriter();
 		await writer.write(请求数据);
-		log(`[UDP转发] DNS 请求已写入上游: ${请求字节数}B`);
+		log(`[DNS forwarding] DNS query sent upstream: ${请求字节数}B`);
 		writer.releaseLock();
 		await tcpSocket.readable.pipeTo(new WritableStream({
 			async write(chunk) {
 				const 原始响应 = 数据转Uint8Array(chunk);
-				log(`[UDP转发] 收到 DNS 响应: ${原始响应.byteLength}B`);
+				log(`[DNS forwarding] Received DNS response: ${原始响应.byteLength}B`);
 				const 封装结果 = 响应封装器 ? await 响应封装器(原始响应) : 原始响应;
 				const 发送片段列表 = Array.isArray(封装结果) ? 封装结果 : [封装结果];
 				if (!发送片段列表.length) return;
@@ -2341,7 +2341,7 @@ async function forwardataudp(udpChunk, webSocket, respHeader, request, 响应封
 			},
 		}));
 	} catch (error) {
-		log(`[UDP转发] DNS 转发失败: ${error?.message || error}`);
+		log(`[DNS forwarding] DNS forwarding failed: ${error?.message || error}`);
 	}
 }
 
@@ -2492,7 +2492,7 @@ function 创建上行写入队列({ 获取写入器, 释放写入器, 重试连�
 		} catch (err) {
 			closed = true;
 			clear(err);
-			log(`[${名称}] 写入失败: ${err?.message || err}`);
+			log(`[${名称}] Write failed: ${err?.message || err}`);
 			try { 关闭连接?.(err) } catch (_) { }
 		} finally {
 			draining = false;
@@ -2513,7 +2513,7 @@ function 创建上行写入队列({ 获取写入器, 释放写入器, 重试连�
 			closed = true;
 			const err = Object.assign(new Error(`${名称}: upload queue overflow (${nextBytes}B/${nextItems})`), { isQueueOverflow: true });
 			clear(err);
-			log(`[${名称}] 队列超限，关闭连接`);
+			log(`[${名称}] Queue limit exceeded; closing connection`);
 			try { 关闭连接?.(err) } catch (_) { }
 			throw err;
 		}
@@ -2711,7 +2711,7 @@ function 构造本地204响应(respHeader = null) {
 	const response = new Uint8Array(协议响应头.byteLength + 本地204响应.byteLength);
 	response.set(协议响应头, 0);
 	response.set(本地204响应, 协议响应头.byteLength);
-	log(`[TCP转发] 构造本地204响应: ${response.byteLength}B`);
+	log(`[TCP] Generated local HTTP 204 response: ${response.byteLength}B`);
 	return response;
 }
 
@@ -2837,7 +2837,7 @@ async function httpsConnect(targetHost, targetPort, initialData, TCP连接, pars
 			await proxySocket.opened;
 			const socket = new TlsClient(proxySocket, { serverName: tlsServerName, insecure: true, allowChacha });
 			await socket.handshake();
-			log(`[HTTPS代理] TLS版本: ${socket.isTls13 ? '1.3' : '1.2'} | Cipher: 0x${socket.cipherSuite.toString(16)}${socket.cipherConfig?.chacha ? ' (ChaCha20)' : ' (AES-GCM)'}`);
+			log(`[HTTPS proxy] TLS version: ${socket.isTls13 ? '1.3' : '1.2'} | Cipher: 0x${socket.cipherSuite.toString(16)}${socket.cipherConfig?.chacha ? ' (ChaCha20)' : ' (AES-GCM)'}`);
 			return socket;
 		} catch (error) {
 			try { proxySocket.close() } catch (e) { }
@@ -2849,7 +2849,7 @@ async function httpsConnect(targetHost, targetPort, initialData, TCP连接, pars
 			tlsSocket = await 打开HTTPS代理TLS(false);
 		} catch (error) {
 			if (!/cipher|handshake|TLS Alert|ServerHello|Finished|Unsupported|Missing TLS/i.test(error?.message || `${error || ''}`)) throw error;
-			log(`[HTTPS代理] AES-GCM TLS 握手失败，回退 ChaCha20 兼容模式: ${error?.message || error}`);
+			log(`[HTTPS proxy] AES-GCM TLS handshake failed; trying ChaCha20 compatibility mode: ${error?.message || error}`);
 			tlsSocket = await 打开HTTPS代理TLS(true);
 		}
 
@@ -5024,11 +5024,11 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 	const 当前时间戳 = Date.now();
 	const 现缓存项 = DoH缓存[缓存键];
 	if (现缓存项 && 当前时间戳 < 现缓存项.过期时间) {
-		log(`[DoH查询] 命中缓存 ${域名} ${记录类型} via ${DoH解析服务}`);
+		log(`[DoH] Cache hit ${域名} ${记录类型} via ${DoH解析服务}`);
 		return 现缓存项.data.map(data => ({ type: qtype, data }));
 	}
 	const 开始时间 = performance.now();
-	log(`[DoH查询] 开始查询 ${域名} ${记录类型} via ${DoH解析服务}`);
+	log(`[DoH] Query started ${域名} ${记录类型} via ${DoH解析服务}`);
 	try {
 		// 记录类型字符串转数值
 		// 编码域名为 DNS wire format labels
@@ -5059,7 +5059,7 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 		qview.setUint16(12 + qname.length + 2, 1); // QCLASS = IN
 
 		// 通过 POST 发送 dns-message 请求
-		log(`[DoH查询] 发送查询报文 ${域名} via ${DoH解析服务} (type=${qtype}, ${query.length}字节)`);
+		log(`[DoH] Sending query ${域名} via ${DoH解析服务} (type=${qtype}, ${query.length} bytes)`);
 		const response = await fetch(DoH解析服务, {
 			method: 'POST',
 			headers: {
@@ -5078,7 +5078,7 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 		const dv = new DataView(buf.buffer);
 		const qdcount = dv.getUint16(4);
 		const ancount = dv.getUint16(6);
-		log(`[DoH查询] 收到响应 ${域名} ${记录类型} via ${DoH解析服务} (${buf.length}字节, ${ancount}条应答)`);
+		log(`[DoH] Response received ${域名} ${记录类型} via ${DoH解析服务} (${buf.length} bytes, ${ancount} answers)`);
 
 		// 解析域名（处理指针压缩）
 		const 解析域名 = (pos) => {
@@ -5148,7 +5148,7 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 			answers.push({ name, type, TTL: ttl, data, rdata });
 		}
 		const 耗时 = (performance.now() - 开始时间).toFixed(2);
-		log(`[DoH查询] 查询完成 ${域名} ${记录类型} via ${DoH解析服务} ${耗时}ms 共${answers.length}条结果${answers.length > 0 ? '\n' + answers.map((a, i) => `  ${i + 1}. ${a.name} type=${a.type} TTL=${a.TTL} data=${a.data}`).join('\n') : ''}`);
+		log(`[DoH] Query completed ${域名} ${记录类型} via ${DoH解析服务} ${耗时}ms; ${answers.length} results${answers.length > 0 ? '\n' + answers.map((a, i) => `  ${i + 1}. ${a.name} type=${a.type} TTL=${a.TTL} data=${a.data}`).join('\n') : ''}`);
 		// DoH 缓存至少保留 5 分钟，响应 TTL 更长时尊重响应 TTL；空响应使用 5 分钟负缓存
 		const 相关记录 = answers.filter(answer => answer.type === qtype);
 		const 最小TTL = 相关记录.length > 0 ? Math.min(...相关记录.map(a => a.TTL)) : 0;
@@ -5166,7 +5166,7 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 				}
 			}
 			DoH缓存[缓存键] = { data: 缓存数据, 过期时间: 缓存过期时间 };
-			log(`[DoH查询] 写入缓存 ${域名} ${记录类型} TTL=${缓存TTL}s${缓存数据.length === 0 ? '（空结果）' : ''}`);
+			log(`[DoH] Cache stored ${域名} ${记录类型} TTL=${缓存TTL}s${缓存数据.length === 0 ? ' (empty result)' : ''}`);
 		}
 		return answers;
 	} catch (error) {
@@ -5973,7 +5973,7 @@ async function getCloudflareUsage(Email, GlobalAPIKey, AccountID, APIToken) {
 		const workers = sum(acc.workersInvocationsAdaptive);
 		const total = pages + workers;
 		const max = 100000;
-		log(`统计结果 - Pages: ${pages}, Workers: ${workers}, 总计: ${total}, 上限: 100000`);
+		log(`Usage - Pages: ${pages}, Workers: ${workers}, total: ${total}, limit: 100000`);
 		return { success: true, pages, workers, total, max };
 
 	} catch (error) {
@@ -6054,7 +6054,7 @@ async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com',
 
 		// 判断是否是域名（非IP地址）
 		if (ipv4Regex.test(地址) || ipv6Regex.test(地址)) {
-			log(`[反代解析] ${地址} 为IP地址，直接使用`);
+			log(`[Proxy resolver] ${地址} is an IP address; using directly`);
 			所有反代数组.push([地址, 端口]);
 			continue;
 		}
@@ -6067,14 +6067,14 @@ async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com',
 		const txtData = txtRecords.filter(r => r.type === 16).map(r => (r.data));
 		const txtAddresses = 解析TXT反代记录(txtData);
 		if (txtAddresses.length > 0) {
-			log(`[反代解析] ${地址} 使用TXT记录，共${txtAddresses.length}个结果`);
+			log(`[Proxy resolver] ${地址} resolved from TXT records: ${txtAddresses.length} addresses`);
 			所有反代数组.push(...txtAddresses);
 			continue;
 		}
 
 		const ipv4List = aRecords.filter(r => r.type === 1).map(r => r.data);
 		if (ipv4List.length > 0) {
-			log(`[反代解析] ${地址} 未获取到TXT记录，使用A记录，共${ipv4List.length}个结果`);
+			log(`[Proxy resolver] ${地址} has no TXT records; using ${ipv4List.length} A records`);
 			所有反代数组.push(...ipv4List.map(ip => [ip, 端口]));
 			continue;
 		}
@@ -6082,20 +6082,20 @@ async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com',
 		const aaaaRecords = await DoH查询(地址, 'AAAA');
 		const ipv6List = aaaaRecords.filter(r => r.type === 28).map(r => `[${r.data}]`);
 		if (ipv6List.length > 0) {
-			log(`[反代解析] ${地址} 未获取到TXT和A记录，使用AAAA记录，共${ipv6List.length}个结果`);
+			log(`[Proxy resolver] ${地址} has no TXT/A records; using ${ipv6List.length} AAAA records`);
 			所有反代数组.push(...ipv6List.map(ip => [ip, 端口]));
 		} else {
-			log(`[反代解析] ${地址} 未获取到TXT、A和AAAA记录，保留原域名`);
+			log(`[Proxy resolver] ${地址} has no TXT/A/AAAA records; keeping the original hostname`);
 			所有反代数组.push([地址, 端口]);
 		}
 	}
 	const 排序后数组 = 所有反代数组.sort((a, b) => a[0].localeCompare(b[0]));
 	const 目标根域名 = 目标域名.includes('.') ? 目标域名.split('.').slice(-2).join('.') : 目标域名;
 	let 随机种子 = [...(目标根域名 + UUID)].reduce((a, c) => a + c.charCodeAt(0), 0);
-	log(`[反代解析] 随机种子: ${随机种子}\n目标站点: ${目标根域名}`)
+	log(`[Proxy resolver] Random seed: ${随机种子}\nDestination: ${目标根域名}`)
 	const 洗牌后 = [...排序后数组].sort(() => (随机种子 = (随机种子 * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff - 0.5);
 	const 解析结果 = 洗牌后.slice(0, 8);
-	log(`[反代解析] 解析完成 总数: ${解析结果.length}个\n${解析结果.map(([ip, port], index) => `${index + 1}. ${ip}:${port}`).join('\n')}`);
+	log(`[Proxy resolver] Resolved ${解析结果.length} addresses\n${解析结果.map(([ip, port], index) => `${index + 1}. ${ip}:${port}`).join('\n')}`);
 	return 解析结果;
 }
 
