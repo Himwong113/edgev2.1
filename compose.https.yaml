@@ -1,0 +1,20 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      VPN_DOMAIN: ${VPN_DOMAIN:?Set VPN_DOMAIN in .env, e.g. vpn.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      tunnel:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

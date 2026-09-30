@@ -1,0 +1,13 @@
+{
+  "name": "edgetunnel-self-hosted",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.9.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env self-host/server.js",
+    "setup": "node self-host/setup.js",
+    "test": "node --test self-host/*.test.js"
+  },
+  "dependencies": { "ws": "^8.18.3" }
+}
