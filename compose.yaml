@@ -13,6 +13,7 @@ services:
       OFF_LOG: ${OFF_LOG:-true}
       DEBUG: ${DEBUG:-false}
       PROXYIP: ${PROXYIP:-}
+      RUNTIME_PROFILE: ${RUNTIME_PROFILE:-standard}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080"
     volumes:

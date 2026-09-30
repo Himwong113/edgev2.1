@@ -8,11 +8,14 @@ import { WebSocketServer } from 'ws';
 import { FileKV } from './storage.js';
 import { createConnector, installRuntime } from './runtime.js';
 import { makeNodeLink, makeSubscription } from './subscriptions.js';
+import { TUNNEL_LIMITS, TunnelBudget } from './limits.js';
 
 installRuntime();
 const { default: worker } = await import('../_worker.js');
 
-export async function createApp(settings = process.env) {
+export async function createApp(settings = process.env, { limits = TUNNEL_LIMITS } = {}) {
+  const profile = settings.RUNTIME_PROFILE || 'standard';
+  if (!['standard', 'small-vm'].includes(profile)) throw new Error('RUNTIME_PROFILE must be standard or small-vm');
   if (!settings.ADMIN || settings.ADMIN === 'replace-with-a-long-random-password' || settings.ADMIN.trim().length < 16 || /[\r\n]/.test(settings.ADMIN)) {
     throw new Error('Set ADMIN to a password of at least 16 characters, or run npm run setup');
   }
@@ -51,6 +54,7 @@ export async function createApp(settings = process.env) {
     },
     makeNodeLink: config => makeNodeLink(config, origin),
     makeSubscription: (config, request) => makeSubscription(config, request, origin) };
+  if (profile === 'small-vm') Object.assign(env, { TCP_CONCURRENT_DIAL: '1', PROXY_CONCURRENT_DIAL: '1', OFF_LOG: 'true', DEBUG: 'false' });
   const pages = new Map(await Promise.all(['login', 'admin'].map(async name => [name, await readFile(new URL(`./public/${name}.html`, import.meta.url), 'utf8')])));
   const clientJS = await readFile(new URL('./public/app.js', import.meta.url), 'utf8');
   env.ASSETS = { fetch(request) {
@@ -59,7 +63,9 @@ export async function createApp(settings = process.env) {
   } };
   const background = new Set();
   const connectors = new Set();
-  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 16 * 1024 * 1024,
+  const controls = new Set();
+  const budget = new TunnelBudget(limits);
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: limits.messageBytes,
     handleProtocols: () => false }); // sec-websocket-protocol carries early data, not an actual negotiated protocol.
   const ctx = { waitUntil(promise) {
     const pending = Promise.resolve(promise).catch(error => console.error('Background task failed:', error.message));
@@ -123,28 +129,54 @@ export async function createApp(settings = process.env) {
   server.headersTimeout = 15_000;
   server.requestTimeout = 30_000;
   server.on('upgrade', async (raw, socket, head) => {
+    socket.on('error', () => socket.destroy());
+    let upgraded;
+    const control = budget.open(error => {
+      connector.close();
+      if (upgraded) {
+        upgraded.resume();
+        const reason = ['Tunnel authentication timed out', 'Tunnel queue capacity exceeded',
+          'WebSocket message exceeds the size limit'].includes(error.message) ? error.message : 'Tunnel processing failed';
+        upgraded.close(1008, reason);
+        const deadline = setTimeout(() => upgraded.terminate(), 1000).unref();
+        upgraded.once('close', () => clearTimeout(deadline));
+      } else socket.destroy();
+    });
+    if (!control) {
+      const message = 'Tunnel capacity reached; try again later';
+      socket.end(`HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 5\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`, () => socket.destroy());
+      return;
+    }
+    controls.add(control);
     const connector = createConnector();
     connectors.add(connector);
     const abort = new AbortController();
-    socket.on('error', () => socket.destroy());
-    socket.once('close', () => { abort.abort(); connector.close(); connectors.delete(connector); });
+    socket.once('close', () => {
+      abort.abort(); connector.close(); connectors.delete(connector);
+      control.close();
+      control.idle().finally(() => controls.delete(control));
+    });
     try {
-      const response = await worker.fetch(toRequest(raw, connector, abort.signal), env, ctx);
+      const request = toRequest(raw, connector, abort.signal);
+      request.tunnelControl = control;
+      const response = await worker.fetch(request, env, ctx);
       if (response.status !== 101 || !response.webSocket) {
         await response.body?.cancel();
-        socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return;
+        socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n', () => socket.destroy()); return;
       }
       if (socket.destroyed) return;
       wss.handleUpgrade(raw, socket, head, ws => {
+        upgraded = ws;
         response.webSocket.server.attach(ws);
         ws.alive = true;
         ws.on('pong', () => { ws.alive = true; });
         ws.once('close', () => connector.close());
       });
     } catch (error) {
+      control.stop();
       connector.close();
       console.error('Upgrade failed:', error.message);
-      socket.end('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      socket.end('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n', () => socket.destroy());
     }
   });
   const heartbeat = setInterval(() => {
@@ -154,14 +186,18 @@ export async function createApp(settings = process.env) {
     }
   }, 30_000);
   heartbeat.unref();
-  return { server, kv, env, get activeSockets() { return [...connectors].reduce((sum, connector) => sum + connector.size, 0); },
+  return { server, kv, env, profile,
+    get tunnelStats() { return { connections: budget.connections, queuedBytes: budget.bytes, peakQueuedBytes: budget.peakBytes, pauses: budget.pauses }; },
+    get activeSockets() { return [...connectors].reduce((sum, connector) => sum + connector.size, 0); },
     async close() {
       clearInterval(heartbeat);
       for (const ws of wss.clients) ws.terminate();
       for (const connector of connectors) connector.close();
+      for (const control of controls) control.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       await Promise.allSettled([...background]);
+      await Promise.all([...controls].map(control => control.idle()));
       await new Promise(resolve => wss.close(resolve));
     } };
 }

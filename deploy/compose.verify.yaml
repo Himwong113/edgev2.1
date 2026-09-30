@@ -1,0 +1,11 @@
+# Test-only override: requires the HTTPS and small-VM Compose files.
+# Ephemeral loopback ports; never use this file for a production deployment.
+services:
+  tunnel:
+    image: ${VERIFY_IMAGE:?Set VERIFY_IMAGE to the isolated test image}
+    ports: !override
+      - "127.0.0.1:0:8080"
+  caddy:
+    ports: !override
+      - "127.0.0.1:0:80"
+      - "127.0.0.1:0:443"

@@ -18,11 +18,12 @@ class WorkerResponse extends NativeResponse {
   }
 }
 
-class WorkerSocket extends EventTarget {
+export class WorkerSocket extends EventTarget {
   constructor() {
     super();
     this.state = WebSocket.CONNECTING;
     this.pending = [];
+    this.paused = false;
   }
   accept() { this.state = WebSocket.OPEN; }
   get readyState() { return this.socket?.readyState ?? this.state; }
@@ -31,15 +32,21 @@ class WorkerSocket extends EventTarget {
     if (!this.socket) {
       if (this.state !== WebSocket.OPEN) throw new Error('WebSocket is closed');
       // Early-data handlers may send before the HTTP upgrade has completed.
-      this.pending.push(data);
-      return;
+      return new Promise((resolve, reject) => this.pending.push({ data, resolve, reject }));
     }
     return new Promise((resolve, reject) => this.socket.send(data, error => error ? reject(error) : resolve()));
   }
   close(code = 1000, reason = '') {
     if (this.socket) this.socket.close(code, reason);
-    else this.state = WebSocket.CLOSED;
+    else {
+      this.state = WebSocket.CLOSED;
+      this.closeCode = code;
+      this.closeReason = reason;
+      for (const pending of this.pending.splice(0)) pending.reject(new Error('WebSocket is closed'));
+    }
   }
+  pause() { this.paused = true; this.socket?.pause(); }
+  resume() { this.paused = false; this.socket?.resume(); }
   attach(socket) {
     this.socket = socket;
     socket.binaryType = 'arraybuffer';
@@ -52,9 +59,9 @@ class WorkerSocket extends EventTarget {
       event.message = error.message;
       this.dispatchEvent(event);
     });
-    for (const data of this.pending) this.send(data).catch(() => socket.terminate());
-    this.pending = [];
-    if (this.state === WebSocket.CLOSED) socket.close();
+    if (this.paused) socket.pause();
+    for (const { data, resolve, reject } of this.pending.splice(0)) this.send(data).then(resolve, reject);
+    if (this.state === WebSocket.CLOSED) socket.close(this.closeCode, this.closeReason);
   }
 }
 
@@ -93,7 +100,9 @@ export function installRuntime() {
 
 export function createConnector() {
   const sockets = new Set();
+  let disposed = false;
   function connect({ hostname, port }, options = {}) {
+    if (disposed) throw new Error('TCP connector is closed');
     const host = hostname.replace(/^\[|\]$/g, '');
     const secure = options.secureTransport === 'on';
     const params = { host, port: Number(port), allowHalfOpen: options.allowHalfOpen ?? false };
@@ -114,7 +123,7 @@ export function createConnector() {
     opened.catch(() => {});
     closed.catch(() => {});
     const { readable, writable } = Duplex.toWeb(socket);
-    return { readable, writable, opened, closed, close() { socket.destroy(); } };
+    return { readable, writable, opened, closed, localMode: true, close() { socket.destroy(); } };
   }
-  return { connect, close() { for (const socket of sockets) socket.destroy(); }, get size() { return sockets.size; } };
+  return { connect, close() { disposed = true; for (const socket of sockets) socket.destroy(); }, get size() { return sockets.size; } };
 }

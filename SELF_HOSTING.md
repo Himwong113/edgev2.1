@@ -50,6 +50,104 @@ Open `https://vpn.example.com/admin` and re-import the newly generated client li
 
 Keep ports 80 and 443 available for Caddy. On a NAS already using those ports, configure its existing HTTPS reverse proxy to forward to `http://127.0.0.1:8080` with WebSocket upgrades enabled, and run only `compose.yaml`. Set `PUBLIC_URL` to the actual HTTPS address used by clients. No administrator privileges, host networking, TUN device, or privileged container mode are required by this server.
 
+## Small VM: 1 vCPU and 512 MiB RAM
+
+For 1–5 personal devices, enable the optional resource profile after setting
+up `.env` as above. It preserves your credentials and existing data volume:
+
+```bash
+docker compose -f compose.yaml -f compose.small-vm.yaml up -d --build
+```
+
+For public HTTPS, use all four files:
+
+```bash
+docker compose -f compose.yaml -f compose.https.yaml \
+  -f compose.small-vm.yaml -f compose.small-vm.https.yaml up -d --build
+```
+
+The separate HTTPS resource override avoids starting Caddy in a LAN-only
+deployment. Include the same files when running `ps`, `logs`, or subsequent
+`up` commands. A plain `docker compose up` removes the opt-in resource
+settings when it recreates the service.
+
+Building an image can require more memory than running it. If the 512 MiB
+VM cannot build comfortably, build on another machine with the same CPU
+architecture, transfer the image using `docker save`/`docker load`, then
+run the profile command with `--no-build` instead of `--build`.
+
+| Resource | Tunnel | Optional Caddy |
+| --- | --- | --- |
+| Container memory cap | 192 MiB | 96 MiB |
+| Swap allowance beyond memory cap | None | None |
+| Runtime memory tuning | 96 MiB JavaScript heap | 64 MiB Go soft limit |
+| Process/thread cap | 64 | 64 |
+| CPU tuning | At most 1 CPU | Go scheduler parallelism of 1 |
+
+Heap/Go limits are not total memory limits; buffers, native allocations, and
+other overhead also count against the container cap. Caddy's Go limit is
+soft; see [Go's memory-limit guidance](https://go.dev/doc/gc-guide#Memory_limit).
+Limits are not reservations: Linux and Docker use the remaining VM
+memory, and containers normally use less than their caps. The profile also
+rotates container logs, disables stored request logs/debug output, and
+keeps direct and proxy dialing at one attempt. The image uses Node.js 22
+Alpine and a lightweight local HTTP health check. See the
+[official Node image variants](https://github.com/nodejs/docker-node/blob/main/README.md)
+and [Docker resource limits](https://docs.docker.com/engine/containers/resource_constraints/).
+
+All self-hosted profiles now have these tunnel safeguards:
+
+- At most 128 concurrent connections, including pending upgrades;
+  excess upgrades receive HTTP 503 with an English explanation.
+- Authentication must finish within 10 seconds, including Shadowsocks
+  handshakes. Idle unauthenticated connections are closed.
+- Each WebSocket message is limited to 512 KiB. Clients must split larger
+  transfers into messages; the total transfer size is not restricted.
+- Input pauses at 256 KiB of queued/processing data and resumes below
+  64 KiB, with a hard 1 MiB limit per tunnel and a shared 32 MiB budget.
+- Local TCP response chunks are sent immediately, with send completion
+  awaited before reading the next chunk. WebSocket compression stays off.
+
+These limits protect the tunnel queues; they are not a comprehensive
+Internet-facing abuse/rate-limiting policy. Use HTTPS for remote access,
+keep the admin password private, and monitor container health and memory.
+Authentication or queue-limit failures close the affected connection,
+not the entire application.
+
+For native Node.js, use `RUNTIME_PROFILE=small-vm` and
+`NODE_OPTIONS=--max-old-space-size=96` with your service manager. Native
+execution still needs OS/service-manager limits if you want the same
+total-memory or CPU caps as Docker.
+
+The target is at least 100 Mbps on suitable hardware, not a speed guarantee.
+Container-limited measurements and remaining limitations are recorded in
+[SMALL_VM_RESULTS.md](./SMALL_VM_RESULTS.md). A real 512 MiB VM, its Internet
+uplink, router forwarding, and your actual clients still need validation.
+
+### Rollback
+
+Before an upgrade, retain the currently running image under a separate tag
+and back up `.env` and `tunnel_data`. If the `local` image tag refers to your
+running deployment, you can save it with:
+
+```bash
+docker image tag edgetunnel-self-hosted:local edgetunnel-self-hosted:before-small-vm
+```
+
+To remove only the resource profile, run the original Compose command,
+omitting the two small-VM files. This keeps the new runtime safety and
+forwarding changes. To restore the old runtime too, restore the saved tag:
+
+```bash
+docker image tag edgetunnel-self-hosted:before-small-vm edgetunnel-self-hosted:local
+docker compose up -d --no-build
+```
+
+For HTTPS rollback, include `-f compose.yaml -f compose.https.yaml` in that
+last command. Do not use `down -v` or change the Compose project name:
+either would remove or bypass your existing saved settings. Client links
+do not need changing just to enable or remove the resource profile.
+
 ## Clients and supported features
 
 | Feature | Self-hosted deployment |
@@ -84,6 +182,7 @@ The normal settings controls are in English. Advanced JSON preserves the upstrea
 | `OFF_LOG` | Disable stored request logs; defaults to `true` in Compose |
 | `DEBUG` | Print detailed connection diagnostics; defaults to `false` |
 | `PROXYIP` | Optional explicit fallback proxy; blank uses direct egress only |
+| `RUNTIME_PROFILE` | `standard` or `small-vm`; the latter forces quiet logging and single dialing; Docker limits require the Compose overrides |
 
 Changing the UUID changes proxy credentials. Changing the public hostname changes subscription tokens; refresh the client's subscription URL afterward. Changing only `ADMIN` does not change an explicitly configured or persisted UUID. After editing `.env`, run the relevant Compose `up -d` command again to recreate the container.
 
@@ -94,7 +193,7 @@ For the basic LAN deployment:
 ```bash
 docker compose ps
 docker compose logs --tail=100 tunnel
-curl http://127.0.0.1:8080/healthz
+curl --noproxy '*' http://127.0.0.1:8080/healthz
 docker compose down
 ```
 
@@ -123,4 +222,30 @@ npm ci
 npm test
 ```
 
-The 11 integration tests exercise local login, secure-cookie handling, authenticated settings, native subscription formats, invalid credentials, file persistence, VLESS early data, IPv6 addresses, a 256 KiB transfer, and real TCP echo traffic through VLESS, Trojan, and Shadowsocks AEAD. The Docker image was also verified for startup, login, configuration persistence after restart, and VLESS WebSocket traffic through a running Caddy reverse proxy. Public router access and certificate issuance depend on your server/domain and must be checked there.
+The tests cover login, cookies, subscriptions, persistence, early data,
+IPv6, and real VLESS/Trojan/Shadowsocks traffic. Additional tests exercise
+queue budgets and cleanup, pause/resume, capacity rejection, authentication
+timeouts, blocked/slow peers, many-record Shadowsocks streams, and failed
+outbound connections.
+
+To check Docker and Caddy without changing a running deployment:
+
+```bash
+docker build -t edgetunnel-self-hosted:small-vm-test .
+npm run test:docker
+```
+
+The check creates a separate `edgetunnel-smallvm-verify` Compose project
+with random test credentials and ephemeral loopback ports, verifies login,
+settings persistence, TLS forwarding and effective resource limits, then
+removes only that test project's containers and temporary volumes. It
+refuses to reuse an existing verification project. Docker Compose 2.24.4
+or later is required for this test's [`!override` port mappings](https://docs.docker.com/reference/compose-file/merge/#replace-value). Its
+localhost/internal-CA TLS exception is test-only; normal clients must
+validate their server's certificate.
+
+The repeatable throughput/load harness is `npm run benchmark -- ...`.
+See [SMALL_VM_RESULTS.md](./SMALL_VM_RESULTS.md) for its isolated test setup,
+commands and recorded results. It must not be pointed at a production
+service. Public access and public certificate issuance depend on your
+server/domain and must be checked there.

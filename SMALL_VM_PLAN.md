@@ -1,6 +1,8 @@
 # Small-VM deployment and performance plan
 
-Status: planned; implementation and performance validation are not complete.
+Status: implemented; functional and isolated Compose checks pass. Sustained
+load testing and final baseline comparison are in progress. Actual
+512 MiB VM validation remains necessary. See `SMALL_VM_RESULTS.md`.
 
 ## Goal and scope
 
@@ -165,13 +167,13 @@ only if the public endpoint or transport settings actually change.
 
 ## Completion checklist
 
-- [ ] Small-VM Compose profile and HTTPS memory limits implemented.
-- [ ] Alpine image and lightweight health check implemented.
-- [ ] Connection, message-size, and authentication limits implemented.
-- [ ] Queue budgets, backpressure, and cleanup implemented.
-- [ ] Immediate local forwarding and fixed-UUID optimization implemented.
-- [ ] Existing and new functional tests pass.
-- [ ] Isolated Docker and Caddy checks pass.
+- [x] Small-VM Compose profile and HTTPS memory limits implemented.
+- [x] Alpine image and lightweight health check implemented.
+- [x] Connection, message-size, and authentication limits implemented.
+- [x] Queue budgets, backpressure, and cleanup implemented.
+- [x] Immediate local forwarding and fixed-UUID optimization implemented.
+- [x] Existing and new functional tests pass.
+- [x] Isolated Docker and Caddy checks pass.
 - [ ] Baseline comparison and sustained-load measurements recorded.
-- [ ] Deployment and rollback instructions updated.
-- [ ] Results and actual-VM validation limitations documented.
+- [x] Deployment and rollback instructions updated.
+- [x] Results and actual-VM validation limitations documented.

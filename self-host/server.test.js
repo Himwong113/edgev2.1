@@ -9,15 +9,17 @@ import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } f
 import WebSocket from 'ws';
 import { createApp } from './server.js';
 import { FileKV } from './storage.js';
+import { TUNNEL_LIMITS } from './limits.js';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const ADMIN = 'integration-test-password-1234';
 const UUID = '90cd4a77-141a-43c9-991b-08263cfe9c10';
 const agent = 'edgetunnel-test';
 
-async function fixture(t, extra = {}) {
+async function fixture(t, extra = {}, runtime = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'edgetunnel-test-'));
   const settings = { ADMIN, UUID, DATA_DIR: directory, PUBLIC_URL: 'http://localhost:8080', OFF_LOG: 'true', ...extra };
-  const app = await createApp(settings);
+  const app = await createApp(settings, runtime);
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -194,7 +196,9 @@ function masterKey(password) { return createHash('md5').update(password).digest(
 function ssSession(salt) {
   return { key: Buffer.from(hkdfSync('sha1', masterKey(UUID), salt, Buffer.from('ss-subkey'), 16)), nonce: Buffer.alloc(12) };
 }
-function increment(nonce) { for (let i = 0; i < nonce.length; i++) { if (++nonce[i] !== 0) break; } }
+function increment(nonce) {
+  for (let i = 0; i < nonce.length; i++) { nonce[i] = (nonce[i] + 1) & 255; if (nonce[i] !== 0) break; }
+}
 function encrypt(session, plaintext) {
   const cipher = createCipheriv('aes-128-gcm', session.key, session.nonce);
   const result = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
@@ -222,6 +226,53 @@ test('Shadowsocks AES-128-GCM WebSocket encrypts and decrypts real TCP traffic',
   const count = decrypt(remote, data.subarray(16, 34)).readUInt16BE();
   assert.equal(count, payload.length);
   assert.deepEqual(decrypt(remote, data.subarray(34, 34 + count + 16)), payload);
+});
+
+test('Shadowsocks nonce carry and many-record streams preserve bidirectional payloads', async t => {
+  const { app, base } = await fixture(t, { RUNTIME_PROFILE: 'small-vm' });
+  const port = await echoServer(t);
+  const ws = await openWS(t, base, {}, '/?enc=aes-128-gcm');
+  const salt = randomBytes(16), session = ssSession(salt);
+  const payload = randomBytes(3 * 1024 * 1024);
+  let pending = Buffer.alloc(0), remote, size = null, received = 0;
+  const plaintext = [];
+  let resolve, reject;
+  const reply = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const timer = setTimeout(() => reject(new Error('Shadowsocks multi-record response timed out')), 10_000);
+  t.after(() => clearTimeout(timer));
+  ws.on('message', data => {
+    try {
+      pending = Buffer.concat([pending, data]);
+      if (!remote) {
+        if (pending.length < 16) return;
+        remote = ssSession(pending.subarray(0, 16)); pending = pending.subarray(16);
+      }
+      while (true) {
+        if (size === null) {
+          if (pending.length < 18) return;
+          size = decrypt(remote, pending.subarray(0, 18)).readUInt16BE(); pending = pending.subarray(18);
+        }
+        if (pending.length < size + 16) return;
+        const data = decrypt(remote, pending.subarray(0, size + 16));
+        plaintext.push(data); received += data.length;
+        pending = pending.subarray(size + 16); size = null;
+        if (received === payload.length) { clearTimeout(timer); resolve(Buffer.concat(plaintext)); }
+      }
+    } catch (error) { reject(error); }
+  });
+  ws.on('error', reject);
+  const header = Buffer.from([1, 127, 0, 0, 1, port >> 8, port & 255]);
+  let first = true;
+  async function record(data) {
+    const size = Buffer.alloc(2); size.writeUInt16BE(data.length);
+    const frame = Buffer.concat([...(first ? [salt] : []), encrypt(session, size), encrypt(session, data)]);
+    first = false;
+    await new Promise((resolve, reject) => ws.send(frame, error => error ? reject(error) : resolve()));
+  }
+  await record(header);
+  for (let offset = 0; offset < payload.length; offset += 0x3fff) await record(payload.subarray(offset, offset + 0x3fff));
+  assert.deepEqual(await reply, payload);
+  assert.ok(app.tunnelStats.peakQueuedBytes <= TUNNEL_LIMITS.connectionBytes);
 });
 
 test('file KV survives a new instance and serializes simultaneous writes', async t => {
@@ -256,4 +307,132 @@ test('IPv6 public address is preserved in node links and subscription identity',
   const config = await (await fetch(base + '/admin/config.json', { headers: { Cookie: cookie, 'User-Agent': agent } })).json();
   assert.equal(config.HOST, '[::1]');
   assert.equal(new URL(config.LINK).hostname, '[::1]');
+});
+
+test('small-VM profile keeps authentication and disables expensive diagnostics', async t => {
+  const { app, base } = await fixture(t, { RUNTIME_PROFILE: 'small-vm', DEBUG: 'true', OFF_LOG: 'false', TCP_CONCURRENT_DIAL: '4' });
+  assert.equal(app.profile, 'small-vm');
+  assert.equal(app.env.DEBUG, 'false');
+  assert.equal(app.env.OFF_LOG, 'true');
+  assert.equal(app.env.TCP_CONCURRENT_DIAL, '1');
+  const port = await echoServer(t);
+  const ws = await openWS(t, base);
+  const reply = receive(ws, 6);
+  ws.send(vless(port, Buffer.from('test')));
+  assert.deepEqual(await reply, Buffer.from([0, 0, 116, 101, 115, 116]));
+});
+
+test('server rejects excess upgrades in English and reuses disconnected capacity', async t => {
+  const { app, base } = await fixture(t, {}, { limits: { ...TUNNEL_LIMITS, connections: 1 } });
+  const first = await openWS(t, base);
+  const rejected = new WebSocket(base.replace('http:', 'ws:'));
+  t.after(() => rejected.terminate());
+  const response = await new Promise((resolve, reject) => {
+    rejected.on('error', reject);
+    rejected.on('unexpected-response', (_request, response) => {
+      let body = '';
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+  });
+  assert.equal(response.status, 503);
+  assert.match(response.body, /Tunnel capacity reached/);
+  first.terminate();
+  for (let i = 0; i < 100 && app.tunnelStats.connections; i++) await delay(10);
+  assert.equal(app.tunnelStats.connections, 0);
+  await openWS(t, base);
+  assert.equal(app.tunnelStats.connections, 1);
+});
+
+test('idle and partial Shadowsocks handshakes hit authentication timeout', async t => {
+  const { app, base } = await fixture(t, {}, { limits: { ...TUNNEL_LIMITS, authenticationMs: 100 } });
+  for (const path of ['/', '/?enc=aes-128-gcm']) {
+    const ws = await openWS(t, base, {}, path);
+    const closed = once(ws, 'close');
+    if (path.includes('enc')) ws.send(randomBytes(8));
+    const [code, reason] = await closed;
+    assert.equal(code, 1008);
+    assert.match(reason.toString(), /authentication timed out/);
+  }
+  assert.equal(app.tunnelStats.queuedBytes, 0);
+});
+
+test('oversized WebSocket messages are rejected without opening outbound sockets', async t => {
+  const { app, base } = await fixture(t);
+  const ws = await openWS(t, base);
+  const closed = once(ws, 'close');
+  ws.send(Buffer.alloc(TUNNEL_LIMITS.messageBytes + 1));
+  assert.equal((await closed)[0], 1009);
+  assert.equal(app.activeSockets, 0);
+  assert.equal(app.tunnelStats.queuedBytes, 0);
+});
+
+test('blocked TCP receiver pauses input and releases processing bytes after disconnect', async t => {
+  const peers = new Set();
+  const target = net.createServer(socket => {
+    peers.add(socket); socket.pause(); socket.on('error', () => {});
+  });
+  target.listen(0, '127.0.0.1'); await once(target, 'listening');
+  t.after(async () => { for (const socket of peers) socket.destroy(); await new Promise(resolve => target.close(resolve)); });
+  const { app, base } = await fixture(t);
+  const ws = await openWS(t, base);
+  ws.send(vless(target.address().port, Buffer.alloc(1)));
+  const chunk = Buffer.alloc(64 * 1024);
+  for (let i = 0; i < 200 && ws.readyState === WebSocket.OPEN; i++) {
+    ws.send(chunk);
+    await delay(1);
+    if (app.tunnelStats.pauses && app.tunnelStats.queuedBytes >= TUNNEL_LIMITS.pauseBytes) break;
+  }
+  assert.ok(app.tunnelStats.pauses > 0);
+  assert.ok(app.tunnelStats.queuedBytes <= TUNNEL_LIMITS.connectionBytes);
+  ws.terminate();
+  for (let i = 0; i < 200 && (app.tunnelStats.queuedBytes || app.tunnelStats.connections || app.activeSockets); i++) await delay(10);
+  assert.equal(app.tunnelStats.queuedBytes, 0);
+  assert.equal(app.tunnelStats.connections, 0);
+  assert.equal(app.activeSockets, 0);
+});
+
+test('slow WebSocket receiver does not block other tunnels and cleans up on disconnect', async t => {
+  const peers = new Set();
+  const target = net.createServer(socket => {
+    peers.add(socket); socket.on('error', () => {});
+    socket.once('data', () => {
+      let remaining = 8 * 1024 * 1024;
+      function send() {
+        while (remaining > 0 && !socket.destroyed) {
+          const chunk = Buffer.alloc(Math.min(64 * 1024, remaining), 7);
+          remaining -= chunk.length;
+          if (!socket.write(chunk)) { socket.once('drain', send); return; }
+        }
+      }
+      send();
+    });
+  });
+  target.listen(0, '127.0.0.1'); await once(target, 'listening');
+  t.after(async () => { for (const socket of peers) socket.destroy(); await new Promise(resolve => target.close(resolve)); });
+  const { app, base } = await fixture(t);
+  const slow = await openWS(t, base);
+  slow.pause(); slow.send(vless(target.address().port, Buffer.from('download')));
+  const port = await echoServer(t);
+  const fast = await openWS(t, base);
+  const reply = receive(fast, 4);
+  fast.send(vless(port, Buffer.from('ok')));
+  assert.deepEqual(await reply, Buffer.from([0, 0, 111, 107]));
+  slow.terminate(); fast.terminate();
+  for (let i = 0; i < 200 && (app.activeSockets || app.tunnelStats.connections); i++) await delay(10);
+  assert.equal(app.activeSockets, 0);
+  assert.equal(app.tunnelStats.queuedBytes, 0);
+});
+
+test('destination EOF before a response cannot crash the application through fallback rejection', async t => {
+  const target = net.createServer(socket => socket.end());
+  target.listen(0, '127.0.0.1'); await once(target, 'listening');
+  t.after(() => new Promise(resolve => target.close(resolve)));
+  const { app, base } = await fixture(t);
+  const ws = await openWS(t, base);
+  const closed = once(ws, 'close');
+  ws.send(vless(target.address().port, Buffer.alloc(0)));
+  await closed;
+  assert.equal((await fetch(base + '/healthz')).status, 200);
+  assert.equal(app.activeSockets, 0);
 });

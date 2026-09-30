@@ -31,9 +31,9 @@ export default {
 		const upgradeHeader = (request.headers.get('Upgrade') || '').toLowerCase(), contentType = (request.headers.get('content-type') || '').toLowerCase();
 		const 管理员密码 = env.ADMIN || env.admin || env.PASSWORD || env.password || env.pswd || env.TOKEN || env.KEY || env.UUID || env.uuid;
 		const 加密秘钥 = env.KEY || '勿动此默认密钥，有需求请自行通过添加变量KEY进行修改';
-		const userIDMD5 = await MD5MD5(管理员密码 + 加密秘钥);
 		const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 		const envUUID = env.UUID || env.uuid;
+		const userIDMD5 = (envUUID && uuidRegex.test(envUUID)) ? null : await MD5MD5(管理员密码 + 加密秘钥);
 		const userID = (envUUID && uuidRegex.test(envUUID)) ? envUUID.toLowerCase() : [userIDMD5.slice(0, 8), userIDMD5.slice(8, 12), '4' + userIDMD5.slice(13, 16), '8' + userIDMD5.slice(17, 20), userIDMD5.slice(20)].join('-');
 		const hosts = env.HOST ? (await 整理成数组(env.HOST)).map(h => h.toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0]) : [url.hostname];
 		const host = hosts[0];
@@ -1180,6 +1180,8 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 	try { (/** @type {any} */ (serverSock)).accept({ allowHalfOpen: true }) }
 	catch (_) { serverSock.accept() }
 	serverSock.binaryType = 'arraybuffer';
+	const localControl = request.tunnelControl;
+	localControl?.setSocket(serverSock);
 	let remoteConnWrapper = { socket: null, connectingPromise: null, retryConnect: null };
 	let isDnsQuery = false;
 	let 判断是否是木马 = null;
@@ -1509,6 +1511,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			const port = (明文数据[cursor] << 8) | 明文数据[cursor + 1];
 			cursor += 2;
 			const rawClientData = 明文数据.subarray(cursor);
+			localControl?.authenticate();
 			if (isSpeedTestSite(hostname)) {
 				await 启用WS本地测速模式(上下文.回包Socket, null, rawClientData);
 				return;
@@ -1555,6 +1558,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		if (判断协议类型 === '木马') {
 			const 解析结果 = 解析木马请求(chunk, yourUUID);
 			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid trojan request');
+			localControl?.authenticate();
 			const { port, hostname, rawClientData, isUDP } = 解析结果;
 			if (isSpeedTestSite(hostname)) {
 				await 启用WS本地测速模式(serverSock, null, rawClientData);
@@ -1575,6 +1579,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 			const bytes = 当前块字节;
 			const 解析结果 = 解析魏烈思请求(bytes, yourUUID);
 			if (解析结果?.hasError) throw new Error(解析结果.message || 'Invalid VLESS request');
+			localControl?.authenticate();
 			const { port, hostname, version, isUDP, rawClientData } = 解析结果;
 			const respHeader = new Uint8Array([version, 0]);
 			if (isSpeedTestSite(hostname)) {
@@ -1609,6 +1614,7 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		上行写入队列.清空();
 		释放远端写入器();
 		try { 木马UDP上下文.反代Socket?.close() } catch (e) { }
+		localControl?.fail(err);
 		closeSocketQuietly(serverSock);
 	};
 
@@ -1619,6 +1625,10 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 
 	const 入队WS显式传输 = (data) => {
 		if (WS显式传输停止接收 || WS显式传输失败) return;
+		if (localControl) {
+			localControl.enqueue(data, 处理WS入站数据);
+			return;
+		}
 		const chunkSize = Math.max(0, 有效数据长度(data));
 		const nextBytes = WS显式队列字节 + chunkSize;
 		const nextItems = WS显式队列条目 + 1;
@@ -1652,6 +1662,16 @@ async function 处理WS请求(request, yourUUID, url, 反代上下文 = {}) {
 		入队WS显式传输(event.data);
 	});
 	serverSock.addEventListener('close', () => {
+		if (localControl) {
+			WS显式传输失败 = true;
+			WS显式传输停止接收 = true;
+			localControl.stop();
+			上行写入队列.清空();
+			try { remoteConnWrapper.socket?.close() } catch (e) { }
+			try { 木马UDP上下文.反代Socket?.close() } catch (e) { }
+			释放远端写入器();
+			return;
+		}
 		closeSocketQuietly(serverSock);
 		收尾WS显式传输();
 	});
@@ -2263,7 +2283,8 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			if (本次发送首包) 已通过代理发送首包 = true;
 			remoteConnWrapper.socket = newSocket;
 			newSocket.closed.catch(() => { }).finally(() => closeSocketQuietly(ws));
-			connectStreams(newSocket, ws, respHeader, null);
+			const streamTask = connectStreams(newSocket, ws, respHeader, null);
+			if (request?.tunnelControl) streamTask.catch(error => request.tunnelControl.fail(error));
 		})();
 
 		remoteConnWrapper.connectingPromise = 当前连接任务;
@@ -2290,10 +2311,11 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			log(`[TCP] Connecting directly to: ${host}:${portNum}`);
 			const initialSocket = await connectDirect(host, portNum, rawData, true);
 			remoteConnWrapper.socket = initialSocket;
-			connectStreams(initialSocket, ws, respHeader, async () => {
+			const streamTask = connectStreams(initialSocket, ws, respHeader, async () => {
 				if (remoteConnWrapper.socket !== initialSocket) return;
 				await connecttoPry();
 			});
+			if (request?.tunnelControl) streamTask.catch(error => request.tunnelControl.fail(error));
 		} catch (err) {
 			log(`[TCP] Direct connection to ${host}:${portNum} failed: ${err.message}`);
 			if (err instanceof Error && err.name === '预加载解析为空') {
@@ -2653,6 +2675,31 @@ function 创建下行Grain发送器(webSocket, headerData = null) {
 }
 
 async function connectStreams(remoteSocket, webSocket, headerData, retryFunc) {
+	// Local sends are awaitable. Forward immediately without the Worker-specific
+	// batching timers or additional chunk copies, preserving first-response data.
+	if (remoteSocket.localMode) {
+		let header = headerData, hasData = false;
+		const reader = remoteSocket.readable.getReader();
+		try {
+			while (webSocket.readyState === WebSocket.OPEN) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (!value?.byteLength) continue;
+				hasData = true;
+				let data = value;
+				if (header) {
+					data = new Uint8Array(header.byteLength + value.byteLength);
+					data.set(header);
+					data.set(value, header.byteLength);
+					header = null;
+				}
+				await WebSocket发送并等待(webSocket, data);
+			}
+		} catch (error) { closeSocketQuietly(webSocket); }
+		finally { try { await reader.cancel(); } catch (_) { } reader.releaseLock(); }
+		if (!hasData && retryFunc && webSocket.readyState === WebSocket.OPEN) await retryFunc();
+		return;
+	}
 	let header = headerData, hasData = false, reader, useBYOB = false;
 	const BYOB单次读取上限 = 64 * 1024;
 	const 下行发送器 = 创建下行Grain发送器(webSocket, header);

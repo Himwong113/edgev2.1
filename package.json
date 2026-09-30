@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env self-host/server.js",
     "setup": "node self-host/setup.js",
-    "test": "node --test self-host/*.test.js"
+    "test": "node --test self-host/*.test.js",
+    "test:docker": "node self-host/deployment-check.js",
+    "benchmark": "node self-host/benchmark.js"
   },
   "dependencies": { "ws": "^8.18.3" }
 }
