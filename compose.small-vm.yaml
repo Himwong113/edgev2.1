@@ -1,0 +1,19 @@
+# Opt in with: docker compose -f compose.yaml -f compose.small-vm.yaml up -d --build
+services:
+  tunnel:
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 1.0
+    pids_limit: 64
+    environment:
+      RUNTIME_PROFILE: small-vm
+      NODE_OPTIONS: --max-old-space-size=96
+      TCP_CONCURRENT_DIAL: "1"
+      PROXY_CONCURRENT_DIAL: "1"
+      OFF_LOG: "true"
+      DEBUG: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

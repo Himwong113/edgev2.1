@@ -1,0 +1,14 @@
+# Include only together with compose.https.yaml.
+services:
+  caddy:
+    mem_limit: 96m
+    memswap_limit: 96m
+    pids_limit: 64
+    environment:
+      GOMEMLIMIT: 64MiB
+      GOMAXPROCS: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

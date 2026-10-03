@@ -1,4 +1,10 @@
 # 🚀 edgetunnel 2.1
+## Local / home server deployment
+
+Run this project on a Linux server or NAS using Docker Compose, with an English admin page and persistent local storage. See [the self-hosting guide](./SELF_HOSTING.md) for LAN access, optional HTTPS, and client setup.
+
+For a 1 vCPU / 512 MiB VM, see the [small-VM deployment profile](./SELF_HOSTING.md#small-vm-1-vcpu-and-512-mib-ram), [implementation plan](./SMALL_VM_PLAN.md), and [validation results](./SMALL_VM_RESULTS.md).
+
 ![后台页面](./img.png)
 
 [![Stars](https://img.shields.io/github/stars/cmliu/edgetunnel?style=flat-square&logo=github)](https://github.com/cmliu/edgetunnel/stargazers)

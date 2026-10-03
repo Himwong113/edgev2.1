@@ -1,0 +1,28 @@
+services:
+  tunnel:
+    build: .
+    image: edgetunnel-self-hosted:local
+    restart: unless-stopped
+    init: true
+    environment:
+      ADMIN: ${ADMIN:?Set ADMIN in .env to a password of at least 16 characters}
+      KEY: ${KEY:-}
+      UUID: ${UUID:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      TUNNEL_PATH: ${TUNNEL_PATH:-/}
+      OFF_LOG: ${OFF_LOG:-true}
+      DEBUG: ${DEBUG:-false}
+      PROXYIP: ${PROXYIP:-}
+      RUNTIME_PROFILE: ${RUNTIME_PROFILE:-standard}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080"
+    volumes:
+      - tunnel_data:/app/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+
+volumes:
+  tunnel_data:
